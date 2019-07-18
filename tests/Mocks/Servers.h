@@ -23,8 +23,10 @@
 #ifndef ARANGODB_TESTS_MOCKS_SERVERS_H
 #define ARANGODB_TESTS_MOCKS_SERVERS_H 1
 
-#include "ApplicationFeatures/ApplicationServer.h"
 #include "StorageEngineMock.h"
+
+#include "Agency/Store.h"
+#include "ApplicationFeatures/ApplicationServer.h"
 
 struct TRI_vocbase_t;
 
@@ -46,10 +48,12 @@ namespace tests {
 namespace mocks {
 
 class MockServer {
- public:
+ protected:
+  // You can only create specialized types
   MockServer();
   virtual ~MockServer();
 
+ public:
   void init();
 
   TRI_vocbase_t& getSystemDatabase() const;
@@ -65,8 +69,8 @@ class MockServer {
  protected:
   arangodb::application_features::ApplicationServer _server;
   StorageEngineMock _engine;
-  std::unique_ptr<TRI_vocbase_t> _system;
-  std::vector<std::pair<arangodb::application_features::ApplicationFeature*, bool>> _features;
+  std::unordered_map<arangodb::application_features::ApplicationFeature*, bool> _features;
+  std::string _testFilesystemPath;
 };
 
 class MockAqlServer : public MockServer {
@@ -82,6 +86,22 @@ class MockRestServer : public MockServer {
  public:
   MockRestServer();
   ~MockRestServer();
+};
+
+class MockClusterServer : public MockServer {
+  // You can only create specialized types
+ protected:
+  MockClusterServer();
+  ~MockClusterServer();
+
+ private:
+  arangodb::consensus::Store _agencyStore;
+};
+
+class MockDBServer : public MockClusterServer {
+ public:
+  MockDBServer();
+  ~MockDBServer();
 };
 
 }  // namespace mocks
