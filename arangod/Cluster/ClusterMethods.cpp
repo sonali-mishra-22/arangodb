@@ -540,8 +540,7 @@ static void collectResultsFromAllShards(
 
 static std::shared_ptr<std::unordered_map<std::string, std::vector<std::string>>> DistributeShardsEvenly(
     ClusterInfo* ci, uint64_t numberOfShards, uint64_t replicationFactor,
-    uint64_t minReplicationFactor, std::vector<std::string>& dbServers,
-    bool warnAboutReplicationFactor) {
+    std::vector<std::string>& dbServers, bool warnAboutReplicationFactor) {
   auto shards =
       std::make_shared<std::unordered_map<std::string, std::vector<std::string>>>();
 
@@ -2929,7 +2928,9 @@ std::vector<std::shared_ptr<LogicalCollection>> ClusterMethods::persistCollectio
 
       // the default behavior however is to bail out and inform the user
       // that the requested replicationFactor is not possible right now
-      if (dbServers.size() < replicationFactor || dbServers.size() < minReplicationFactor) {
+      if (dbServers.size() < replicationFactor) {
+        TRI_ASSERT(minReplicationFactor <= replicationFactor);
+        // => (dbServers.size() < minReplicationFactor) is granted
         LOG_TOPIC("9ce2e", DEBUG, Logger::CLUSTER)
             << "Do not have enough DBServers for requested replicationFactor,"
             << " nrDBServers: " << dbServers.size()
@@ -2941,8 +2942,9 @@ std::vector<std::shared_ptr<LogicalCollection>> ClusterMethods::persistCollectio
 
       if (!avoid.empty()) {
         // We need to remove all servers that are in the avoid list
-        if (dbServers.size() - avoid.size() < replicationFactor ||
-            dbServers.size() - avoid.size() < minReplicationFactor) {
+        if (dbServers.size() - avoid.size() < replicationFactor) {
+          TRI_ASSERT(minReplicationFactor <= replicationFactor);
+          // => (dbServers.size() - avoid.size() < minReplicationFactor) is granted
           LOG_TOPIC("03682", DEBUG, Logger::CLUSTER)
               << "Do not have enough DBServers for requested replicationFactor,"
               << " (after considering avoid list),"
@@ -2960,7 +2962,7 @@ std::vector<std::shared_ptr<LogicalCollection>> ClusterMethods::persistCollectio
       }
       std::random_shuffle(dbServers.begin(), dbServers.end());
       shards = DistributeShardsEvenly(ci, numberOfShards, replicationFactor,
-                                      minReplicationFactor, dbServers, !col->system());
+                                      dbServers, !col->system());
     }
 
     if (shards->empty() && !col->isSmart()) {

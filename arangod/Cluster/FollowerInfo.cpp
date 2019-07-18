@@ -202,7 +202,7 @@ Result FollowerInfo::remove(ServerID const& sid) {
     return agencyRes;
   }
   if (agencyRes.is(TRI_ERROR_CLUSTER_NOT_LEADER)) {
-    // TODO: Do we need to rollback?
+    // Next run in Maintenance will fix this.
     return agencyRes;
   }
 
@@ -289,10 +289,18 @@ bool FollowerInfo::updateFailoverCandidates() {
   // Next acquire _dataLock
   WRITE_LOCKER(dataLocker, _dataLock);
   if (_canWrite) {
-    // Short circuit, we have multiple writes in the above write lock
-    // The first needs to do things and flips _canWrite
-    // All followers can return as soon as the lock is released
-    return true;
+// Short circuit, we have multiple writes in the above write lock
+// The first needs to do things and flips _canWrite
+// All followers can return as soon as the lock is released
+#ifdef ARANGODB_ENABLE_MAINTAINER_MODE
+    TRI_ASSERT(_failoverCandidates->size() == _followers->size());
+    std::vector<string> diff;
+    std::set_symmetric_difference(_failoverCandidates->begin(),
+                                  _failoverCandidates->end(), _followers->begin(),
+                                  _followers->end(), std::back_inserter(diff));
+    TRI_ASSERT(diff.empty());
+#endif
+    return _canWrite;
   }
   TRI_ASSERT(_followers->size() + 1 >= _docColl->minReplicationFactor());
   // Update both lists (we use a copy here, as we are modifying them in other places individually!)
@@ -300,6 +308,13 @@ bool FollowerInfo::updateFailoverCandidates() {
   // Just be sure
   TRI_ASSERT(_failoverCandidates.get() != _followers.get());
   TRI_ASSERT(_failoverCandidates->size() == _followers->size());
+#ifdef ARANGODB_ENABLE_MAINTAINER_MODE
+  std::vector<string> diff;
+  std::set_symmetric_difference(_failoverCandidates->begin(),
+                                _failoverCandidates->end(), _followers->begin(),
+                                _followers->end(), std::back_inserter(diff));
+  TRI_ASSERT(diff.empty());
+#endif
   Result res = persistInAgency(true);
   if (!res.ok()) {
     // We could not persist the update in the agency.
@@ -308,14 +323,11 @@ bool FollowerInfo::updateFailoverCandidates() {
         << "Could not persist insync follower for " << _docColl->vocbase().name()
         << "/" << std::to_string(_docColl->planId())
         << " keep RO-mode for now, next write will retry.";
-    return false;
+    TRI_ASSERT(!_canWrite);
+  } else {
+    _canWrite = true;
   }
-  _canWrite = true;
-  VPackBuilder hund;
-  hund.openObject();
-  injectFollowerInfoInternal(hund);
-  hund.close();
-  return true;
+  return _canWrite;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -327,24 +339,6 @@ Result FollowerInfo::persistInAgency(bool isRemove) const {
   std::string curPath = CurrentShardPath(*_docColl);
   std::string planPath = PlanShardPath(*_docColl);
   AgencyComm ac;
-  double startTime = TRI_microtime();
-  double timeout = startTime;
-  if (isRemove) {
-    // This is important, give it 2h if needed. We really do not want to get
-    // into the position to fail to drop a follower, just because we cannot
-    // talk to the agency temporarily. The worst would be to drop the follower
-    // locally but not report the fact to the agency. The second worst is to
-    // not be able to drop the follower, despite the fact that a replication
-    // was not successful. All else is less dramatic. Therefore we try for
-    // a long time.
-    timeout += 7200;
-  } else {
-    // This is important, give it 1h if needed. We really do not want to get
-    // into the position to not accept a shard getting-in-sync just because
-    // we cannot talk to the agency temporarily.
-    timeout += 3600;
-  }
-
   do {
     AgencyReadTransaction trx(std::vector<std::string>(
         {AgencyCommManager::path(planPath), AgencyCommManager::path(curPath)}));
@@ -396,13 +390,10 @@ Result FollowerInfo::persistInAgency(bool isRemove) const {
           << reportName(isRemove) << ", could not read " << planPath << " and "
           << curPath << " in agency.";
     }
-    std::this_thread::sleep_for(std::chrono::microseconds(500000));
-  } while (TRI_microtime() < timeout &&
-           !application_features::ApplicationServer::isStopping());
-  if (application_features::ApplicationServer::isStopping()) {
-    return TRI_ERROR_SHUTTING_DOWN;
-  }
-  return TRI_ERROR_CLUSTER_AGENCY_COMMUNICATION_FAILED;
+    using namespace std::chrono_literals;
+    std::this_thread::sleep_for(500ms);
+  } while (!application_features::ApplicationServer::isStopping());
+  return TRI_ERROR_SHUTTING_DOWN;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -444,7 +435,8 @@ VPackBuilder FollowerInfo::newShardEntry(VPackSlice oldValue) const {
   TRI_ASSERT(oldValue.isObject());
   {
     VPackObjectBuilder b(&newValue);
-    // Now need to find the `servers` attribute, which is a list:
+    // Copy all but SERVERS and FailoverCandidates.
+    // They will be injected later.
     for (auto const& it : VPackObjectIterator(oldValue)) {
       if (!it.key.isEqualString(maintenance::SERVERS) &&
           !it.key.isEqualString(StaticStrings::FailoverCandidates)) {

@@ -78,7 +78,7 @@ class FollowerInfo {
         _theLeader(""),
         _theLeaderTouched(false),
         _canWrite(_docColl->replicationFactor() <= 1) {
-    // On replicationfactor 1 we do not have anything we can do.
+    // On replicationfactor 1 we do not have any failover servers to maintain.
     // This should also disable satellite tracking.
   }
 
@@ -180,6 +180,7 @@ class FollowerInfo {
         // Invariant, we can only WRITE if we do not have other failover candidates
         READ_LOCKER(readLockerData, _dataLock);
         TRI_ASSERT(_followers->size() == _failoverCandidates->size());
+        TRI_ASSERT(_followers->size() > _docColl->minReplicationFactor());
 #endif
         return _canWrite;
       }
